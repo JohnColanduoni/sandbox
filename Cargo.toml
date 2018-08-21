@@ -1,0 +1,18 @@
+[package]
+name = "sandbox"
+version = "0.1.0"
+
+[dependencies]
+log = "0.4"
+cfg-if = "0.1"
+
+sandbox-ipc = "0.3"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+crsio2 = { git = "https://github.com/JohnColanduoni/crsio2", version = "0.1.1" }
+winapi = { version = "0.3" }
+winhandle = "0.3"
+
+[[test]]
+name = "compute_only"
+harness = false
