@@ -83,6 +83,11 @@ impl Command {
         self
     }
 
+    /**
+     * Spawns a new process with the specified configuration, in a suspended state.
+     * 
+     * You must call `Child::run` once you are ready for the child process to start executing.
+     */
     pub fn spawn(&mut self, services: &mut BrokerServices) -> io::Result<Child> {
         let inner = platform::Child::spawn(services, self)?;
         Ok(Child { inner })
