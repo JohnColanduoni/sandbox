@@ -179,6 +179,7 @@ fn do_spawn(command: &mut StdCommand, ipc_fd: c_int) -> io::Result<(i32, File)> 
                 process::abort()
             },
             pid => {
+                try_libc!(libc::closedir(fd_dir));
                 mem::drop(error_tx);
                 // FIXME: check status of child process
                 return Ok((pid, error_rx));
@@ -198,21 +199,26 @@ unsafe fn do_exec(command: &mut StdCommand, fd_dir: *mut libc::DIR, excluded_fds
 
 // WARNING: No allocation is allowed in this function
 unsafe fn before_exec(fd_dir: *mut libc::DIR, excluded_fds: &[c_int]) -> io::Result<()> {
-    // Close all file descriptors other than stdin, stdout, and stderr
+    // Close all file descriptors other than excluded_fds
+    // We also need to make sure we don't prematurely close the file descriptor being used to enumerate
+    // the /dev/fd directory entries
+    let fd_dir_fd = try_libc!(fd: libc::dirfd(fd_dir));
     loop {
         let mut entry: libc::dirent = mem::zeroed();
         let mut result: *mut libc::dirent = ptr::null_mut();
-        (libc::readdir_r(fd_dir, &mut entry, &mut result));
+        try_libc!(libc::readdir_r(fd_dir, &mut entry, &mut result));
         if result.is_null() {
             break
         }
         if let Some(fd) = str::from_utf8(slice::from_raw_parts((*result).d_name.as_ptr() as *const u8, (*result).d_namlen as usize)).ok()
             .and_then(|x| x.parse::<c_int>().ok()) {
-            if !excluded_fds.iter().any(|&x| x == fd) {
+            if !excluded_fds.iter().any(|&x| x == fd) && fd != fd_dir_fd {
                 try_libc!(fd: libc::close(fd));
             }
         }
     }
+
+    try_libc!(libc::closedir(fd_dir));
 
     Ok(())
 }
