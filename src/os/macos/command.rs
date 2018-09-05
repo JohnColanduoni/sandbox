@@ -161,7 +161,7 @@ impl Child {
 fn do_spawn(command: &mut StdCommand, ipc_fd: c_int) -> io::Result<(i32, File)> {
     unsafe {
         // Any code that allocates needs to be done before fork (due to bugs in pthread_fork on some platforms)
-        let fd_dir = try_libc!(ptr: libc::opendir(b"/dev/fd\0".as_ptr() as *const c_char)); // FIXME: release this
+        let fd_dir = ScopedDir(try_libc!(ptr: libc::opendir(b"/dev/fd\0".as_ptr() as *const c_char)));
         let (mut error_tx, error_rx) = anon_pipe()?; // Used to transmit error between fork and exec in child
 
         match try_libc!(pid: libc::fork(), "fork failed: {}") {
@@ -179,7 +179,7 @@ fn do_spawn(command: &mut StdCommand, ipc_fd: c_int) -> io::Result<(i32, File)> 
                 process::abort()
             },
             pid => {
-                try_libc!(libc::closedir(fd_dir));
+                fd_dir.close()?; // Fail if there is an error closing directory stream
                 mem::drop(error_tx);
                 // FIXME: check status of child process
                 return Ok((pid, error_rx));
@@ -188,7 +188,7 @@ fn do_spawn(command: &mut StdCommand, ipc_fd: c_int) -> io::Result<(i32, File)> 
     }
 }
 
-unsafe fn do_exec(command: &mut StdCommand, fd_dir: *mut libc::DIR, excluded_fds: &[c_int]) -> io::Error {
+unsafe fn do_exec(command: &mut StdCommand, fd_dir: ScopedDir, excluded_fds: &[c_int]) -> io::Error {
     if let Err(err) = before_exec(fd_dir, excluded_fds) {
         return err;
     }
@@ -198,15 +198,15 @@ unsafe fn do_exec(command: &mut StdCommand, fd_dir: *mut libc::DIR, excluded_fds
 }
 
 // WARNING: No allocation is allowed in this function
-unsafe fn before_exec(fd_dir: *mut libc::DIR, excluded_fds: &[c_int]) -> io::Result<()> {
+unsafe fn before_exec(fd_dir: ScopedDir, excluded_fds: &[c_int]) -> io::Result<()> {
     // Close all file descriptors other than excluded_fds
     // We also need to make sure we don't prematurely close the file descriptor being used to enumerate
     // the /dev/fd directory entries
-    let fd_dir_fd = try_libc!(fd: libc::dirfd(fd_dir));
+    let fd_dir_fd = try_libc!(fd: libc::dirfd(fd_dir.0));
     loop {
         let mut entry: libc::dirent = mem::zeroed();
         let mut result: *mut libc::dirent = ptr::null_mut();
-        try_libc!(libc::readdir_r(fd_dir, &mut entry, &mut result));
+        try_libc!(libc::readdir_r(fd_dir.0, &mut entry, &mut result));
         if result.is_null() {
             break
         }
@@ -218,7 +218,8 @@ unsafe fn before_exec(fd_dir: *mut libc::DIR, excluded_fds: &[c_int]) -> io::Res
         }
     }
 
-    try_libc!(libc::closedir(fd_dir));
+    // Fail if there is an error closing directory stream
+    fd_dir.close()?;
 
     Ok(())
 }
@@ -233,5 +234,31 @@ fn anon_pipe() -> io::Result<(File, File)> {
             try_libc!(libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC));
         }
         Ok((pipe_write, pipe_read))
+    }
+}
+
+struct ScopedDir(*mut libc::DIR);
+
+impl Drop for ScopedDir {
+    fn drop(&mut self) {
+        if self.0.is_null() {
+            return
+        }
+        let ret = unsafe { libc::closedir(self.0) };
+        if ret != 0 {
+            error!("error when closing directory stream: {}", io::Error::last_os_error());
+        }
+    }
+}
+
+impl ScopedDir {
+    fn close(mut self) -> io::Result<()> {
+        let ret = unsafe { libc::closedir(self.0) };
+        self.0 = ptr::null_mut();
+        if ret != 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
     }
 }
