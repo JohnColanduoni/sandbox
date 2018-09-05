@@ -1,7 +1,11 @@
 extern crate sandbox;
 extern crate env_logger;
 
-use std::{env, io};
+mod cases;
+
+use cases::TestCases;
+
+use std::{env, io, process};
 use std::path::PathBuf;
 use std::fs::File;
 
@@ -19,7 +23,7 @@ fn run_broker(mut broker: BrokerServices) {
     let policy = Policy::compute_only(&mut broker).unwrap();
     let mut command = Command::new(env::current_exe().unwrap(), &policy);
     command
-        .env("HOME", env::home_dir().unwrap())
+        .env("SANDBOX_TEST_HOME", env::home_dir().unwrap())
         .env_inherit("RUST_LOG");
     let mut child = command.spawn(&mut broker).unwrap();
     child.run().unwrap();
@@ -30,12 +34,14 @@ fn run_broker(mut broker: BrokerServices) {
 fn run_target(mut target: TargetServices) {
     target.lockdown();
 
-    let home_dir = PathBuf::from(env::var_os("HOME").unwrap());
-
-    // Check that we can't access files in the user's home directory
-    match File::open(home_dir.join(".profile")) {
-        Ok(_) => panic!("opening file in home directory succeeded"),
-        Err(ref err) if err.kind() == io::ErrorKind::PermissionDenied => {},
-        Err(err) => panic!("opening file in home directory failed with unexpected error: {}", err),
+    let mut cases = TestCases {
+        os_rng: true,
+        .. TestCases::none()
+    };
+    if cfg!(target_os = "macos") {
+        cases.open_nonexistent_file_home = true; // macOS sandbox doesn't blind open() to files that do not exist
+    }
+    if !cases.run() {
+        process::exit(1);
     }
 }

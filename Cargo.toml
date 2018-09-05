@@ -23,6 +23,8 @@ libc = "0.2"
 
 [dev-dependencies]
 env_logger = "0.5"
+uuid = { version = "0.6", features = ["v4"] }
+rand = "0.5"
 
 [[test]]
 name = "compute_only"
